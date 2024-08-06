@@ -1,0 +1,476 @@
+AWSTemplateFormatVersion: 2010-09-09
+Description: Create a EC2 in public subnet & 2 VPC endpoints & Route 53 private hosted zone.
+
+Parameters:
+  NamingPrefix:
+    Description: The naming prefix for resources created by this template.
+    Type: String
+    Default: sf-privatelink-chel
+  VpcCidrBlock:
+    Description: CIDR block of VPC
+    Type: String
+    Default: 172.31.0.0/16
+  PublicSubnetACidrBlock:
+    Description: CIDR block of VPC
+    Type: String
+    Default: 172.31.0.0/20
+  AvailabilityZone:
+    Description: Desired AvailabilityZone 
+    Type: String
+    Default: ap-northeast-2a
+  SSHLocation:
+    Description: 'The IP address range that can be used to access the web server using SSH.'
+    Type: String
+    MinLength: '9'
+    MaxLength: '18'
+    AllowedPattern: '(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})/(\d{1,2})'
+    ConstraintDescription: must be a valid IP CIDR range of the form x.x.x.x/x. 
+    Default:  0.0.0.0/0 # may correct to user IP
+  KeyName:
+    Description: Name of an EC2 KeyPair to enable SSH access to the instance.
+    Type: 'AWS::EC2::KeyPair::KeyName'
+    ConstraintDescription: must be the name of an existing EC2 KeyPair
+    Default: xxxxxx
+  AmiId:
+    Description: Amazon Linux 2 AMI (HVM), SSD Volume Type, 64-bit (x86), Root device type - ebs 
+    Type: String
+    Default: ami-0a0de518b1fc4524c
+  InstanceType:
+    Description: WebServer EC2 instance type
+    Type: String
+    Default: t2.micro
+  EndpointService:
+    Description: privatelink vpce id of the snowflake account
+    Type: String
+    Default: com.amazonaws.vpce.ap-northeast-2.vpce-svc-xxxxxxxxx
+  DomainNameSnowPrivateLink:
+    Description: Private hosted zone name of the snowflake account privatelink
+    Type: String
+    Default: privatelink.snowflakecomputing.com
+  DomainNameSnowInternalStage:
+    Description: Private hosted zone name of the snowflake internal stage 
+    Type: String
+    Default: s3.ap-northeast-2.amazonaws.com
+  RecordNameSnowPrivateLink1:
+    Description: Record name in the hosted zone of the snowflake account privatelink
+    Type: String
+    Default: xxxxx.ap-northeast-2.privatelink.snowflakecomputing.com
+  RecordNameSnowPrivateLink2:
+    Description: Record name in the hosted zone of the snowflake account privatelink
+    Type: String
+    Default: ocsp.xxxxx.ap-northeast-2.privatelink.snowflakecomputing.com
+  RecordNameSnowPrivateLink3:
+    Description: Record name in the hosted zone of the snowflake account privatelink
+    Type: String
+    Default: app-xxxxx-xxxxx.privatelink.snowflakecomputing.com
+  RecordNameSnowInternalStagePrefix:
+    Description: Record name in the hosted zone of the snowflake internal stage
+    Type: String
+    Default: sfc-xxx-xxx-xxx-customer-stage
+
+
+Resources:
+
+  ###########
+  # VPC
+  ###########    
+
+  VPC:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: !Ref VpcCidrBlock #you can define the IP address range in CIDR notation
+      EnableDnsSupport: 'true'
+      EnableDnsHostnames: 'true' #allocate automatically DNS name to each EC2 instance we deploy in the VPC
+      InstanceTenancy: default #This parameter has only effect if we don't specify a tenancy for the EC2 instance during launch
+      Tags: #Tags are quite useful to differentiate resources 
+        - Key: Name
+          Value: !Join
+            - '-'
+            - - !Ref NamingPrefix
+              - VPC  
+  ###########
+  # Public Subnet A
+  ###########    
+
+  #Each subnet is provisioned in the defined availability zone in the current region
+  #Each subnet is placed inside the VPC defined earlier
+  #These IP ranges are non-overlapping and fall within the overall VPC's IP range
+  PublicSubnetA:
+    Type: AWS::EC2::Subnet
+    Properties:
+      AvailabilityZone: !Ref AvailabilityZone
+      CidrBlock: !Ref PublicSubnetACidrBlock
+      MapPublicIpOnLaunch: true
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: !Join
+            - '-'
+            - - !Ref NamingPrefix
+              - PublicSubnetA       
+        - Key: Reach
+          Value: public
+
+  ###########
+  # Internet Gateway
+  ###########    
+  #InternetGateway allows instances within the VPC to access the internet
+  #also allows the internet to access servers within the public subnet
+  InternetGateway:
+    Type: AWS::EC2::InternetGateway
+  AttachGateway: #associate InternetGateway with our VPC
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      InternetGatewayId: !Ref InternetGateway
+      VpcId: !Ref VPC
+
+
+  ###########
+  # Route Table to Internet
+  ###########  
+  PublicRouteTable: #associates RouteTable itself with a VPC
+    DependsOn: AttachGateway #define a dependency
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPC 
+      Tags:
+        - Key: Name
+          Value: !Join
+            - '-'
+            - - !Ref NamingPrefix
+              - PublicRTB 
+  PublicDefaultRoute: #points an IP address range to a gateway
+    Type: AWS::EC2::Route
+    Properties:
+      DestinationCidrBlock: 0.0.0.0/0 #0.0.0.0/0 is the most common network with all addresses from 0.0.0.0 to 255.255.255.255
+      GatewayId: !Ref InternetGateway
+      RouteTableId: !Ref PublicRouteTable
+  PublicRouteAssociationA: #wires up the route table to a subnet
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      SubnetId: !Ref PublicSubnetA
+
+
+  ###########
+  # Network Acl
+  ########### 
+  PublicNetworkAcl:
+    Type: 'AWS::EC2::NetworkAcl'
+    Properties:
+      VpcId: !Ref VPC
+      Tags:
+      - Key: Name
+        Value: !Join ['-',[!Ref NamingPrefix, 'PublicNetworkAcl']]
+  SubnetNetworkAclAssociationPublic:
+    Type: 'AWS::EC2::SubnetNetworkAclAssociation'
+    Properties:
+      SubnetId: !Ref PublicSubnetA
+      NetworkAclId: !Ref PublicNetworkAcl
+  NetworkAclEntryInPublicAllowVPC:
+    Type: 'AWS::EC2::NetworkAclEntry'
+    Properties:
+      NetworkAclId: !Ref PublicNetworkAcl
+      RuleNumber: 99
+      Protocol: -1
+      RuleAction: allow
+      Egress: false
+      CidrBlock: '0.0.0.0/0'
+  NetworkAclEntryOutPublicAllowVPC:
+    Type: 'AWS::EC2::NetworkAclEntry'
+    Properties:
+      NetworkAclId: !Ref PublicNetworkAcl
+      RuleNumber: 99
+      Protocol: -1
+      RuleAction: allow
+      Egress: true
+      CidrBlock: '0.0.0.0/0'
+
+
+  ###########
+  # Security Group for EC2
+  ###########
+  SecurityGroupEC2:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      VpcId: !Ref VPC
+      GroupName: ec2-SG
+      GroupDescription: >-
+        Enable SSH traffic and HTTP access via port 80 and 443 to the allowed CIDR
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 22 #SSH
+          ToPort: 22
+          CidrIp: !Ref SSHLocation
+      SecurityGroupEgress:
+        - IpProtocol: tcp
+          FromPort: '80'
+          ToPort: '80'
+#          CidrIp: 0.0.0.0/0 
+          DestinationSecurityGroupId: !Ref SecurityGroupVPCendptSnow
+        - IpProtocol: tcp
+          FromPort: '443'
+          ToPort: '443'
+#          CidrIp: 0.0.0.0/0 
+          DestinationSecurityGroupId: !Ref SecurityGroupVPCendptSnow
+        - IpProtocol: tcp
+          FromPort: '80'
+          ToPort: '80'
+#          CidrIp: 0.0.0.0/0 
+          DestinationSecurityGroupId: !Ref SecurityGroupVPCendptS3
+        - IpProtocol: tcp
+          FromPort: '443'
+          ToPort: '443'
+#          CidrIp: 0.0.0.0/0 
+          DestinationSecurityGroupId: !Ref SecurityGroupVPCendptS3
+      Tags:
+        - Key: Name
+          Value: !Join
+            - '-'
+            - - !Ref NamingPrefix
+              - ec2-SG
+
+
+  ###########
+  # Public ec2 
+  ###########
+  EC2Instance:
+    Type: AWS::EC2::Instance
+    Properties:
+      ImageId: !Ref AmiId
+      InstanceType: !Ref InstanceType
+      #AvailabilityZone: !Ref AvailabilityZone
+      KeyName: !Ref KeyName
+      IamInstanceProfile: !Ref PublicInstanceProfile
+      NetworkInterfaces: #NetworkInterfaces property is the only way to give the web server a public IP (and DNS name) 
+        - GroupSet:
+            - !Ref SecurityGroupEC2
+          AssociatePublicIpAddress: 'true'
+          DeviceIndex: '0'
+          DeleteOnTermination: 'true'
+          SubnetId: !Ref PublicSubnetA
+      Tags:
+        - Key: Name
+          Value:  !Join ['-',[!Ref NamingPrefix, 'ins']]
+
+
+  ###################
+  # Instance Profile
+  ###################
+  PublicInstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      InstanceProfileName: ec2-public-instance-profile
+      Path: /
+      Roles:
+        - !Ref EC2InstanceRole
+
+
+  #################################
+  # IAM Role for EC2 to access S3
+  #################################
+  EC2InstanceRole:
+    Type: 'AWS::IAM::Role'
+    Properties:
+      RoleName: S3RoleForEC2-rachel
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - ec2.amazonaws.com
+            Action:
+              - 'sts:AssumeRole'
+      Path: /
+      Policies:
+        - PolicyName: AmazonS3FullAccess
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Effect: Allow
+                Action: 's3:*'
+                Resource: '*'
+
+
+  ###########
+  # Security Group for Interface VPC Endpoint for snowflake privatelink
+  ###########
+  SecurityGroupVPCendptSnow:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      VpcId: !Ref VPC
+      GroupName: vpcEndptSnow-SG
+      GroupDescription: >-
+        Enable HTTP & HTTPS traffic from the VPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: '80'  #80 for http (unsecured websites)
+          ToPort: '80'
+          CidrIp: !GetAtt VPC.CidrBlock
+        - IpProtocol: tcp
+          FromPort: '443' #443 for https (secured websites)
+          ToPort: '443'
+          CidrIp: !GetAtt VPC.CidrBlock
+      Tags:
+        - Key: Name
+          Value: !Join
+            - '-'
+            - - !Ref NamingPrefix
+              - vpcEndptSnow-SG
+
+
+  ###########
+  # Security Group for Interface VPC Endpoint for snowflake internal stage (S3)
+  ###########
+  SecurityGroupVPCendptS3:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      VpcId: !Ref VPC
+      GroupName: vpcEndptS3-SG
+      GroupDescription: >-
+        Enable HTTP & HTTPS traffic from the VPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: '80'  #80 for http (unsecured websites)
+          ToPort: '80'
+          CidrIp: !GetAtt VPC.CidrBlock
+        - IpProtocol: tcp
+          FromPort: '443' #443 for https (secured websites)
+          ToPort: '443'
+          CidrIp: !GetAtt VPC.CidrBlock
+      Tags:
+        - Key: Name
+          Value: !Join
+            - '-'
+            - - !Ref NamingPrefix
+              - vpcEndptS3-SG
+
+
+  #################################
+  # Interface VPC endpoint for snowflake privatelink
+  #################################
+  VPCEndpointSnow:
+    Type: AWS::EC2::VPCEndpoint
+    Properties: 
+      SecurityGroupIds: 
+        - !Ref SecurityGroupVPCendptSnow
+      ServiceName: !Ref EndpointService
+      SubnetIds: 
+        - !Ref PublicSubnetA #!Split [",", !Ref SubnetIDs]
+      VpcEndpointType: Interface
+      VpcId: !Ref VPC
+
+
+  #################################
+  # Interface VPC endpoint for snowflake internal stage (S3)
+  #################################
+  VPCEndpointS3:
+    Type: AWS::EC2::VPCEndpoint
+    Properties: 
+      SecurityGroupIds: 
+        - !Ref SecurityGroupVPCendptS3
+      ServiceName: !Sub 'com.amazonaws.${AWS::Region}.s3'
+      SubnetIds: 
+        - !Ref PublicSubnetA
+      VpcEndpointType: Interface
+      VpcId: !Ref VPC
+
+
+  #################################
+  # Private hosted zone for routing traffic to VPC endpoint for snowflake privatelink
+  #################################
+  HostedZoneSnowPrivateLink:
+    Type: AWS::Route53::HostedZone
+    Properties:
+      HostedZoneConfig: 
+        Comment: 'private hosted zone for the snowflake pivatelink'
+      Name: !Ref DomainNameSnowPrivateLink
+      VPCs: 
+        - 
+          VPCId: !Ref VPC #Required for private hosted zones
+          VPCRegion: !Sub ${AWS::Region}
+      #HostedZoneTags: error: #/HostedZoneTags/0: expected type: JSONObject, found: String
+      #  -  !Join ['-',[!Ref NamingPrefix, 'HostedZoneSnowPrivateLink']]
+  DNSRecordPrivateLink1:
+    Type: AWS::Route53::RecordSet
+    Properties:
+      HostedZoneId: !Ref 'HostedZoneSnowPrivateLink'
+      Comment: DNS name for snowflake privatelink
+      Name: !Ref RecordNameSnowPrivateLink1
+      ResourceRecords:
+      - !Select ['1', !Split [':', !Select ['0', !GetAtt VPCEndpointSnow.DnsEntries]]]
+      Type: CNAME
+      TTL: 60
+  DNSRecordPrivateLink2:
+    Type: AWS::Route53::RecordSet
+    Properties:
+      HostedZoneId: !Ref 'HostedZoneSnowPrivateLink'
+      Comment: DNS name for snowflake privatelink
+      Name: !Ref RecordNameSnowPrivateLink2
+      ResourceRecords:
+      - !Select ['1', !Split [':', !Select ['0', !GetAtt VPCEndpointSnow.DnsEntries]]] # select first value from DNS entries
+      Type: CNAME
+      TTL: 60
+  DNSRecordPrivateLink3:
+    Type: AWS::Route53::RecordSet
+    Properties:
+      HostedZoneId: !Ref 'HostedZoneSnowPrivateLink'
+      Comment: DNS name for snowflake privatelink
+      Name: !Ref RecordNameSnowPrivateLink3
+      ResourceRecords:
+      - !Select ['1', !Split [':', !Select ['0', !GetAtt VPCEndpointSnow.DnsEntries]]] # select first value from DNS entries
+      Type: CNAME
+      TTL: 60
+
+  #################################
+  # Private hosted zone for routing traffic to VPC endpoint for snowflake internal stage (s3)
+  #################################
+  HostedZoneSnowInternalStage:
+    Type: AWS::Route53::HostedZone
+    Properties:
+      HostedZoneConfig: 
+        Comment: 'private hosted zone for the snowflake internal stage'
+      Name: !Ref DomainNameSnowInternalStage
+      VPCs: 
+        - 
+          VPCId: !Ref VPC #Required for private hosted zones
+          VPCRegion: !Sub ${AWS::Region}
+      #HostedZoneTags: 
+      #  -  !Join ['-',[!Ref NamingPrefix, 'HostedZoneSnowInternalStage']]
+  DNSRecordSnowInternalStage:
+    Type: AWS::Route53::RecordSet
+    Properties:
+      HostedZoneId: !Ref 'HostedZoneSnowInternalStage'
+      Comment: DNS name for snowflake internal stage
+      Name: !Join ['.',[!Ref RecordNameSnowInternalStagePrefix, !Ref DomainNameSnowInternalStage]]
+      ResourceRecords:
+      - !Join ['.',[!Ref RecordNameSnowInternalStagePrefix, !Select ['1', !Split [':*.', !Select ['0', !GetAtt VPCEndpointS3.DnsEntries]]]]] # select first value from DNS entries, then remove *. value, then join with internal stage prefix
+      Type: CNAME
+      TTL: 60
+
+
+Outputs:
+  StackName:
+    Description: 'Stack name'
+    Value: !Sub '${AWS::StackName}'
+  VPCId:
+    Value: !Ref VPC
+    Export:
+      Name: 'vpcid'
+  PublicSubnetA:
+    Value: !Ref PublicSubnetA
+    Export:
+      Name: 'public-subnet-A'
+  SecurityGroupEC2:
+    Value: !Ref SecurityGroupEC2
+    Export:
+      Name: 'ec2-security-group'
+  SecurityGroupVPCendptSnow:
+    Value: !Ref SecurityGroupVPCendptSnow
+    Export:
+      Name: 'vpc-endpt-security-group-snow-privatelink'
+  SecurityGroupVPCendptS3:
+    Value: !Ref SecurityGroupVPCendptS3
+    Export:
+      Name: 'vpc-endpt-security-group-snow-s3'
