@@ -1,6 +1,6 @@
 # AWS PrivateLink with Snowflake
 
-![architecture](/images/01_privatelink.jpg)
+![architecture](/images/01_privatelink.png)
 
 ## Background
 Some companies that own business-critical data would like to connect with Snowflake using a private connection, so that the traffic remains within the cloud provider's network (AWS/Azure/GCP) and does not traverse the public internet.
