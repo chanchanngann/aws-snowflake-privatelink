@@ -224,7 +224,7 @@ Set up cross-region VPC peering between the VPC with PrivateLink and another VPC
 This will be addressed as Part 2 of the exercise.
 
 
-### Reference(s)
+## Reference(s)
 
 - Troubleshooting of AWS PrivateLink with Snowflake
   
