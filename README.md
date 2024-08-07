@@ -80,30 +80,32 @@ Explanation:
 SELECT SYSTEM$ALLOWLIST_PRIVATELINK();
 ```
 
-  Since I have created 3 records for private endpoint pointing to Snowflake service and 1 record for private endpoint pointing to Snowflake internal stage in Route 53,
-  I would need to edit the `allowlist.json` to match these records.
+
+   Since I have created 3 records for private endpoint pointing to Snowflake service and 1 record for private endpoint pointing to Snowflake internal stage in Route 53,
+   I would need to edit the `allowlist.json` to match these records.
 
 
-2. On the EC2 instance, download `snowCD` and use it to test private connectivity with Snowflake:
+2. On the EC2 instance, download `snowCD` and use it to test private connectivity with Snowflake.
  
-  Objective: Verify that DNS routing is correct and traffic is routed to the private endpoints properly.
+    Objective: Verify that DNS routing is correct and traffic is routed to the private endpoints properly.
 
-  Commands:
-
+  - Upload `snowCD` and `allowlist.json` to EC2 instance.
 	```
 	scp -i Downloads/keypair.pem  Downloads/snowcd-1.0.5-linux_x86_64.gz ec2-user@1.23.45.67:~/.
 	scp -i Downloads/keypair.pem  Downloads/allowlist.json ec2-user@1.23.45.67:~/.
 	```
+  - Run `snowCD` in EC2 instance to check for connectivity.
 
-```
-ssh -i keypair.pem ec2-user@1.23.45.67
-gzip -d snowcd-1.0.5-linux_x86_64.gz
-chmod +x snowcd-1.0.5-linux_x86_64
-./snowcd-1.0.5-linux_x86_64 allowlist.json
-```
+	```
+	ssh -i keypair.pem ec2-user@1.23.45.67
+	gzip -d snowcd-1.0.5-linux_x86_64.gz
+	chmod +x snowcd-1.0.5-linux_x86_64
+	./snowcd-1.0.5-linux_x86_64 allowlist.json
+	```
 ![snowcd](/images/02_snowcd_test.png)
 
-### Part 2: Upload Files to Internal Stage Using SnowSQL via PrivateLink
+
+### Part 2: Upload Files to Snowflake Internal Stage Using SnowSQL via PrivateLink
 
 1. Upload CSV to EC2
 
@@ -112,7 +114,7 @@ scp -i Downloads/keypair.pem  Downloads/city_hotel_testing123.csv ec2-user@1.23.
 ```
 
 2. Install SnowSQL on EC2
-Initially, allow outbound traffic to the public internet in the EC2 security group to install SnowSQL. 
+    Initially, allow outbound traffic to the public internet in the EC2 security group to install SnowSQL. 
 
 ```
 curl -O https://sfc-repo.snowflakecomputing.com/snowsql/bootstrap/1.3/linux_x86_64/snowsql-1.3.1-linux_x86_64.bash
@@ -120,34 +122,44 @@ chmod +x snowsql-1.3.1-linux_x86_64.bash
 bash snowsql-1.3.1-linux_x86_64.bash
 ```
 
-*Note: Download the version you need. For more details, see  https://docs.snowflake.com/en/user-guide/snowsql-install-config
-https://developers.snowflake.com/snowsql/*
+*Note: Download the version you need. For more details, see*
+
+*- https://docs.snowflake.com/en/user-guide/snowsql-install-config*
+
+*- https://developers.snowflake.com/snowsql/*
 
 3. Update EC2 Security Group Outbound Rules
 
-Change the EC2 security group outbound rules to route traffic to the security groups of the two VPC endpoints (one for Snowflake service and one for the internal stage) on ports 80 and 443.
+   Update the EC2 security group outbound rules to allow traffic only to the security groups of the two VPC endpoints (one for the Snowflake service and one for the internal stage) on ports 80 and 443. Ensure there is no egress to the public internet.
 
-4. Upload CSV to Snowflake internal stage via SnowSQL
+4. Use `SnowSQL` to upload CSV to Snowflake internal stage
 
-- **Test case #1**: for user1, No network policy set up in Snowflake
-
+- **Test case #1**:
+  
+  For user1, No network policy set up in Snowflake. (user1 can also access Snowflake via public internet)
+  
 ```
 snowsql -a <account_locator>.ap-northeast-2.privatelink -u user1
 put file://city_hotel_testing123.csv @~;
 ```
 ![snowsql1](/images/03_user1_snowsql_privatelink.png)
 
-=> Result: SUCCESSLLY uploaded file to Snowflake internal stage.
+*=> Result: SUCCESSLLY logged in and uploaded file to Snowflake internal stage via PrivateLink.*
 
-- **Test case #2**: for user2, Network policy set up in Snowflake to block all public IPs and allow private endpoint `vpce-xxxxxx`
+- **Test case #2**:
+  
+  for user2, Network policy is set up in Snowflake to block all public IPs and only allow private endpoint `vpce-xxxxxx`
 
 ```
 snowsql -a <account_locator>.ap-northeast-2.privatelink -u user2
+put file://city_hotel_testing123.csv @~;
 ```
-![snowsql1](/images/05_user2_snowsql.png)
-=> Result: SUCCESSLLY uploaded file to Snowflake internal stage.
 
-*Note: Set up the network policy for test_user in Snowflake as follows:*
+![snowsql1](/images/05_user2_snowsql.png)
+
+*=> Result: SUCCESSLLY logged in and uploaded file to Snowflake internal stage via PrivateLink.*
+
+*Note: Set up the network policy for user2 in Snowflake as follows:*
 
 ```
 CREATE NETWORK RULE block_public_access
@@ -167,13 +179,17 @@ CREATE NETWORK POLICY allow_vpceid_block_public_policy
 ALTER USER test_user SET NETWORK_POLICY = allow_vpceid_block_public_policy;
 ```
 
-After setting the network policy to block all public IPs, the `test_user` will no longer be able to access Snowflake using the public URL in a browser.
+ After setting the network policy to block all public IPs, the `test_user` (user2) will no longer be able to access Snowflake using the public URL.
+ 
 
 ![snowsight](/images/04_user2_snowsight_publiclink.png)
 
-- **Test case #3**: Test the public route
 
-Since the EC2 outbound rules are set to route traffic only to private endpoints, both users will fail to connect via the public route. This is expected behavior given the security configuration.
+- **Test case #3**:
+
+  Test the public route
+
+  Since the EC2 outbound rules are set to route traffic only to private endpoints, both users will fail to connect via the public route. This is expected behavior given the security configuration.
 
 ```
 snowsql -a <account_name> -u user1
@@ -183,9 +199,7 @@ snowsql -a <account_name> -u user2
 ![snowsql_public1](/images/06_user1_snowsql_publiclink.png)
 ![snowsql_public2](/images/07_user2_snowsql_publiclink.png)
 
-=> Result: FAILED to upload file to Snowflake internal stage.
-
-*Note: Both users will fail to connect via the public route due to the EC2 outbound rules restricting traffic to private endpoints only.*
+*=> Result: FAILED to logged in to Snowflake service with timeout error.*
 
 5. Clean up the stack
 
@@ -194,9 +208,9 @@ aws cloudformation delete-stack --stack-name privatelink-stack
 ```
 
 ### Problem(s)
-**Issue**: I failed to access Snowflake internal stage from the private endpoint, encounting timeout error.
+**Issue**: I failed to upload file to Snowflake internal stage using private endpoint (PrivateLink), encounting timeout error.
 
-**Solution**: As a prerequisite, you need to enable PrivateLink support of internal stage in Snowflake. Execute the following commands:
+**Solution**: As a prerequisite, I need to enable PrivateLink support of internal stage in Snowflake. Execute the following commands:
 
 ```
 USE ROLE ACCOUNTADMIN;
@@ -213,5 +227,6 @@ This will be addressed as Part 2 of the exercise.
 ### Reference(s)
 
 - Troubleshooting of AWS PrivateLink with Snowflake
+  
 https://community.snowflake.com/s/article/AWS-PrivateLink-and-Snowflake-detailed-troubleshooting-Guide
 
