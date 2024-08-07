@@ -5,7 +5,7 @@
 ## Background
 Some companies that own business-critical data would like to connect with Snowflake using a private connection, so that the traffic remains within the cloud provider's network (AWS/Azure/GCP) and does not traverse the public internet.
 
-In this exercise, I would like to demonstrate my understanding of private connectivity with Snowflake using AWS PrivateLink.
+In this exercise, I would like to demonstrate my understanding of private connectivity with Snowflake using AWS PrivateLink. I set up an EC2 instance in the same AWS VPC as the private endpoint connecting to Snowflake via PrivateLink. We will access Snowflake from the EC2 CLI.
 
 To ensure the private connectivity with Snowflake, we need to set up 2 interface VPC endpoints.
 
@@ -19,27 +19,26 @@ To ensure the private connectivity with Snowflake, we need to set up 2 interface
 
 1. How to ensure the EC2 instance in the AWS VPC is using PrivateLink to access Snowflake?
 
-- Update the EC2 instance's security group outbound rules to allow traffic only to the security groups of the 2 VPC endpoints on ports 80 and 443. Ensure there is no public outbound access for the EC2 instance.
+	- Update the EC2 instance's security group outbound rules to allow traffic only to the security groups of the 2 VPC endpoints on ports 80 and 443. Ensure that there is no public egress for the EC2 instance.
 
 
 2. How to block public access to Snowflake for enhanced security?
 
-- Set up 2 layers of network policies:
+	- Set up 2 layers of network policies:
 
-	a. Account Level: Block all public IP addresses for the account and allow access only through private endpoints.
+		a. Account Level: Block all public IP addresses for the account and allow access only through private endpoints.
 	
-	b. User Level: Whitelist a few IP addresses for accessing Snowflake via the public route as a backup plan.
-	User-level network policies will override account-level policies, so set up the user-level policies before applying account-level block on public access. 
+		b. User Level: Whitelist a few IP addresses for accessing Snowflake via the public route as a backup plan. User-level network policies will override account-level policies, so set up the user-level policies before applying account-level block on public access. 
 	
 3. How to test the connection between EC2 instance in the AWS VPC and Snowflake?
 
-- Install `SnowSQL` on the EC2 instance. Then, log in `SnowSQL` using PrivateLink and attempt to upload files to Snowflake internal stage
+	- Install `SnowSQL` on the EC2 instance. Then, log in `SnowSQL` using privatelink-url and upload files to Snowflake internal stage
 
-- Test Case #1: User1 accesses Snowflake via PrivateLink without any IP blocking.
+	- Test Case #1: User1 accesses Snowflake via privatelink-url without any IP blocking set up in Snowflake.
 
-- Test Case #2: User2 accesses Snowflake via PrivateLink with all public IPs blocked, ensuring User2 can no longer access Snowflake using the public internet.
+	- Test Case #2: User2 accesses Snowflake via privatelink-url with all public IPs blocked, ensuring User2 can no longer access Snowflake using the public internet.
 
-- Test Case #3: Both users attemp to access Snowflake via public URL.
+	- Test Case #3: Both users access Snowflake via public URL.
 
 
 ## Steps
@@ -48,15 +47,17 @@ I followed the steps outline in the following resources.
 
 - AWS PrivateLink and Snowflake:
 
-	- https://interworks.com/blog/2023/11/07/configure-aws-privatelink-with-snowflake/
- 	- https://docs.snowflake.com/en/user-guide/admin-security-privatelink
+  - https://docs.snowflake.com/en/user-guide/admin-security-privatelink
+  - https://interworks.com/blog/2023/11/07/configure-aws-privatelink-with-snowflake/
+ 	
 
 - Snowflake Internal Stage with AWS PrivateLink:
 
- 	- https://interworks.com/blog/2024/02/06/configure-aws-privatelink-to-securely-connect-to-snowflake-internal-stages/
- 	- https://docs.snowflake.com/en/user-guide/private-internal-stages-aws
+  - https://docs.snowflake.com/en/user-guide/private-internal-stages-aws
+  - https://interworks.com/blog/2024/02/06/configure-aws-privatelink-to-securely-connect-to-snowflake-internal-stages/
 
-After reviewing the documentation, I created a CloudFormation stack using the following command:
+
+After reviewing the resources, I created a CloudFormation stack using the following command:
 
 ```
 aws cloudformation create-stack --stack-name privatelink-stack --template-body file:///Users/path/to/ec2_privatelink_cfn_template_2.yaml --capabilities CAPABILITY_NAMED_IAM
@@ -68,6 +69,7 @@ Explanation:
 - `--template-body file:///Users/path/to/ec2_privatelink_cfn_template_2.yaml`: Points to the local file containing the CloudFormation template.
 - `--capabilities CAPABILITY_NAMED_IAM`: Allows the stack to create IAM resources.
 
+
 ## Testing the Connection Using PrivateLink
 
 ### Part 1: Private Connectivity
@@ -78,20 +80,20 @@ Explanation:
 SELECT SYSTEM$ALLOWLIST_PRIVATELINK();
 ```
 
-Since I have created 3 records for Snowflake PrivateLink and 1 record for Snowflake internal stage in Route 53,
-I will need to edit the `allowlist.json` to match the records.
+  Since I have created 3 records for private endpoint pointing to Snowflake service and 1 record for private endpoint pointing to Snowflake internal stage in Route 53,
+  I would need to edit the `allowlist.json` to match these records.
 
 
 2. On the EC2 instance, download `snowCD` and use it to test private connectivity with Snowflake:
  
-Objective: Verify that DNS routing is correct and traffic is routed to the private endpoints properly.
+  Objective: Verify that DNS routing is correct and traffic is routed to the private endpoints properly.
 
-Commands:
+  Commands:
 
-```
-scp -i Downloads/keypair.pem  Downloads/snowcd-1.0.5-linux_x86_64.gz ec2-user@1.23.45.67:~/.
-scp -i Downloads/keypair.pem  Downloads/allowlist.json ec2-user@1.23.45.67:~/.
-```
+	```
+	scp -i Downloads/keypair.pem  Downloads/snowcd-1.0.5-linux_x86_64.gz ec2-user@1.23.45.67:~/.
+	scp -i Downloads/keypair.pem  Downloads/allowlist.json ec2-user@1.23.45.67:~/.
+	```
 
 ```
 ssh -i keypair.pem ec2-user@1.23.45.67
