@@ -1,0 +1,4 @@
+[{"host":"xxxxx.ap-northeast-2.privatelink.snowflakecomputing.com","port":443,"type":"SNOWFLAKE_DEPLOYMENT"},
+	{"host":"ocsp.xxxxx.ap-northeast-2.privatelink.snowflakecomputing.com","port":80,"type":"OCSP_CACHE"},
+	{"host":"app-xxxxx-xxxxx.privatelink.snowflakecomputing.com","port":443,"type":"SNOWSIGHT_DEPLOYMENT_REGIONLESS"},
+{"host":"sfc-xxxxx-customer-stage.s3.ap-northeast-2.amazonaws.com","port":443,"type":"STAGE"}]
